@@ -59,22 +59,22 @@ function EnzymeRules.forward(
     return f_orig(pargs...)
 end
 
-# Neither primal nor shadow requested — Enzyme asks for this combo with Const
-# return-type annotations where the caller only needs the side effects of the
-# primal invocation (e.g. mutating an IIP RHS in SciML's solver path).  No rule
-# previously matched this case, so dispatch fell through to Enzyme's default
-# path which tried to differentiate through the raw FunctionWrappersWrapper
-# and failed with `MethodError: no method matching forward(…)` when the wrapper
-# only held plain-Float64 signatures.  Just run the primal and return nothing.
+# Neither primal nor shadow requested.  Without a matching rule, Enzyme's
+# default dispatch path tries to differentiate through the raw
+# FunctionWrappersWrapper and errors with `MethodError: no method matching
+# forward(…)` when the wrapper only holds plain-Float64 signatures.
+#
+# By contract, `FwdConfig{false, false, …}` means the caller wants neither
+# the primal return nor the return shadow — in forward mode this is a
+# no-output probe.  Running the wrapped primal here would mutate IIP
+# `Duplicated` args (e.g. SciML's `du` buffer) and pollute state, so this
+# rule is a strict no-op.
 function EnzymeRules.forward(
     ::EnzymeRules.FwdConfig{false, false, W, RuntimeActivity, StrongZero},
     func::EnzymeCore.Const{<:FunctionWrappersWrapper},
     RT::Type{<:EnzymeCore.Annotation},
     args::Vararg{EnzymeCore.Annotation, N}
 ) where {W, N, RuntimeActivity, StrongZero}
-    f_orig = unwrap(func.val)
-    pargs = ntuple(i -> args[i].val, Val(N))
-    f_orig(pargs...)
     return nothing
 end
 

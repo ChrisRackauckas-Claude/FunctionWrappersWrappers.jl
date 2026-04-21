@@ -77,15 +77,19 @@ end
 end
 
 @testset "Enzyme forward mode, neither primal nor shadow requested" begin
-    # Covers EnzymeRules.FwdConfig{false, false, W, ...}: caller wants only the
-    # side-effects of the primal invocation, no return value and no derivative.
+    # Covers EnzymeRules.FwdConfig{false, false, W, ...} — the no-output probe.
     # Reproduces the SciML/OrdinaryDiffEq.jl v7 Downstream regression where
     # Enzyme dispatched on this config combination with a FWW wrapping an IIP
     # RHS and found no matching rule, throwing
     #   MethodError: no method matching forward(
     #       ::FwdConfigWidth{1, false, false, false, false},
     #       ::Const{<:FunctionWrappersWrapper}, ::Type{Const{Nothing}}, …)
-    f!(du, u) = (du[1] = -u[1]^2; nothing)
+    #
+    # The rule must be a strict no-op: running the wrapped primal here mutates
+    # IIP `Duplicated` args and pollutes state that Enzyme's other forward rules
+    # rely on (causing spurious large errors in subsequent Jacobian builds).
+    counter = Ref(0)
+    f!(du, u) = (counter[] += 1; du[1] = -u[1]^2; nothing)
     fww = FunctionWrappersWrapper(
         f!, (Tuple{Vector{Float64}, Vector{Float64}},), (Nothing,)
     )
@@ -95,19 +99,16 @@ end
     du_shadow = [0.0]
     u_shadow = [1.0]
 
-    # Call forward directly with {false, false}: Enzyme's public-facing
-    # autodiff front-end doesn't normally expose this config, so invoke the
-    # rule by hand.
     config = EnzymeCore.EnzymeRules.FwdConfig{false, false, 1, false, false}()
+    counter[] = 0
     ret = EnzymeCore.EnzymeRules.forward(
         config, Const(fww), EnzymeCore.Const{Nothing},
         Duplicated(du, du_shadow), Duplicated(u, u_shadow)
     )
     @test ret === nothing
-    # primal side-effect did happen: f!(du, u) sets du[1] = -u[1]^2 = -9
-    @test du[1] ≈ -9.0
-    # shadow buffer was not touched by this no-diff path
-    @test du_shadow[1] == 0.0
+    @test counter[] == 0       # primal was NOT invoked — this is a no-op probe
+    @test du[1] == 0.0         # IIP buffer untouched
+    @test du_shadow[1] == 0.0  # shadow buffer untouched
 end
 
 @testset "Enzyme reverse mode, Const return — augmented_primal runs primal" begin
